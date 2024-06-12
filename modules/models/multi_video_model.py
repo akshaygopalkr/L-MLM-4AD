@@ -4,7 +4,7 @@ import torch
 import os
 from modules.models.multi_frame_model import DriveVLMT5 as ImageModel
 from modules.mvp.multi_video_processor import MultiVideoProcessor
-from modules.mvp.multi_video_lidar_processor import MultiVideoLidarProcessor
+from peft import LoraConfig, get_peft_model
 
 TIMESFORMER_HIDDEN_STATE = 768
 
@@ -41,6 +41,17 @@ class DriveVLMT5(nn.Module):
 
         hidden_size = self.model.config.d_model
 
+        if config.lora:
+            # For quantization
+
+            # Create LoRA model
+            lora_config = LoraConfig(
+                use_rslora=True,
+                bias='lora_only',
+                target_modules=['q', 'v']
+            )
+            self.model = get_peft_model(self.model, lora_config)
+
         # If we are freezing the CLIP embeddings
         if config.freeze_lm:
             for param in self.model.parameters():
@@ -49,10 +60,7 @@ class DriveVLMT5(nn.Module):
         print('Trainable Parameters for LM model:')
         print_trainable_parameters(self.model)
 
-        if not config.lidar:
-            self.mvp = MultiVideoProcessor(config.gpa_hidden_size, hidden_size, config.lm)
-        else:
-            self.mvp = MultiVideoLidarProcessor(config.gpa_hidden_size, hidden_size, config.lm)
+        self.mvp = MultiVideoProcessor(config.gpa_hidden_size, hidden_size, config.lm)
 
     def forward(self, text_enc, imgs, labels=None, lidar=None):
 

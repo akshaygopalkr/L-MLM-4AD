@@ -1,11 +1,13 @@
 from torchvision.models import vit_b_32
 import torch.nn as nn
 import torch
-import clip
+from transformers import CLIPVisionModel
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 VIT_HIDDEN_STATE = 768
-CLIP_HIDDEN_STATE = 512
+CLIP_HIDDEN_STATE = 768
 VIT_SEQ_LENGTH = 49
+CLIP_SEQ_LENGTH = 50
 
 class MultiViewProcessor(nn.Module):
 
@@ -117,7 +119,8 @@ class MultiViewProcessorCLIP(nn.Module):
         super().__init__()
 
         # Use ViT for image embeddings
-        self.img_model, _ = clip.load("ViT-B/32", device=device)
+        self.img_model = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch32")
+        self.clip_hidden_state = self.img_model.config.hidden_size
         self.lm = lm
 
         # Modal embedding to distinguish between image and text
@@ -136,17 +139,19 @@ class MultiViewProcessorCLIP(nn.Module):
         # Set matrices based on MIVC paper
         self.w = nn.Linear(in_features=gpa_hidden_size, out_features=1)
         self.Z = nn.Sequential(
-            nn.Linear(in_features=CLIP_HIDDEN_STATE, out_features=gpa_hidden_size, bias=False),
+            nn.Linear(in_features=self.clip_hidden_state * CLIP_SEQ_LENGTH, out_features=gpa_hidden_size, bias=False),
             nn.Tanh()
         )
         self.G = nn.Sequential(
-            nn.Linear(in_features=CLIP_HIDDEN_STATE, out_features=gpa_hidden_size, bias=False),
+            nn.Linear(in_features=self.clip_hidden_state * CLIP_SEQ_LENGTH, out_features=gpa_hidden_size, bias=False),
             nn.Sigmoid()
         )
 
         self.img_projection_layer = nn.Sequential(
-            nn.Linear(in_features=CLIP_HIDDEN_STATE, out_features=self.hidden_size),
-            nn.Linear(in_features=self.hidden_size, out_features=12 * self.hidden_size)
+            nn.Linear(in_features=self.clip_hidden_state, out_features=2 * self.clip_hidden_state),
+            nn.Dropout(0.1),
+            nn.ReLU(),
+            nn.Linear(2 * self.clip_hidden_state, hidden_size)
         )
 
     def gpa(self, img_embeddings):
@@ -169,14 +174,15 @@ class MultiViewProcessorCLIP(nn.Module):
 
         N = imgs.shape[0]
 
-        merged_embedding = torch.stack([self.img_model.encode_image(img_batch).float() for img_batch in imgs])
+        # Get the hidden state CLIP output (N, 6, S, H)
+        merged_embedding = torch.stack([self.img_model(pixel_values=img_batch).last_hidden_state for img_batch in imgs], dim=0)
 
-        # Get merged embedding and reshape to 2D embedding -> (N, 512)
-        merged_embedding = torch.stack([self.gpa(embedding) for embedding in merged_embedding], dim=0)
+        # Get merged embedding and reshape to 2D embedding -> (N, S, H)
+        merged_embedding = torch.stack([self.gpa(embedding.flatten(start_dim=1)).reshape(
+            CLIP_SEQ_LENGTH, self.clip_hidden_state) for embedding in merged_embedding], dim=0)
 
-        # Project to LLM embedding dimension -> (N, 6, 768)
+        # Project to LLM embedding dimension -> (N, S, 768)
         merged_embedding = self.img_projection_layer(merged_embedding)
-        merged_embedding = merged_embedding.reshape(N, 12, self.hidden_size)
 
         # Add modal type embedding to merged embedding
         merged_embedding += self.modal_embeddings(
@@ -186,7 +192,7 @@ class MultiViewProcessorCLIP(nn.Module):
 
     def forward(self, text_enc, imgs, text_model):
 
-        # Get the image embeddings (N x 1 x 49 x H)
+        # Get the image embeddings (N x 50 x H)
         imgs_embedding = self.get_img_embedding(imgs)
 
         # Get the text embeddings (N x S x H)
@@ -196,7 +202,7 @@ class MultiViewProcessorCLIP(nn.Module):
         text_embeddings += self.modal_embeddings(torch.zeros((1, text_embeddings.shape[1]), dtype=torch.int,
                                                              device=device))
 
-        # Concatenate embeddings -> (1 x S x 512)
+        # Concatenate embeddings -> (1 x S x 768)
         merged_embedding = torch.cat([imgs_embedding, text_embeddings], dim=1)
 
         return merged_embedding

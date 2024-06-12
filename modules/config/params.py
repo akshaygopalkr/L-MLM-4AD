@@ -24,9 +24,6 @@ def params():
                                                             'using T5-Large backbone LM')
     parser.add_argument('--dataset', default='DriveLM-challenge', type=str, choices=['all', 'DriveLM', 'NuScenesQA', 'DriveLM-challenge'],
                         help='Can either perform training on all datasets or a specific dataset')
-    parser.add_argument('--lora-dim', default=64, type=int, help='LoRA dimension')
-    parser.add_argument('--lora-alpha', default=32, type=int, help='LoRA alpha')
-    parser.add_argument('--lora-dropout', default=0.05, type=float, help='LoRA dropout')
     parser.add_argument('--img-encoder', type=str, choices=['CLIP', 'Patch'], default='Patch', help='Image encoder '
                                                                                    'to be used for the network')
     parser.add_argument('--num-workers', default=0, type=int, help='# of Workers used by Dataloader')

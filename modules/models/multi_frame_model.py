@@ -1,10 +1,9 @@
-from transformers import T5ForConditionalGeneration, AutoModelForSeq2SeqLM
+from transformers import T5ForConditionalGeneration
 import torch.nn as nn
 import torch
-from peft import LoraConfig, get_peft_model, LoftQConfig
-from modules.mvp.multi_view_lidar_processor import MultiViewLidarProcessor
+from peft import LoraConfig, get_peft_model
 from modules.mvp.multi_view_processor import MultiViewProcessor, MultiViewProcessorCLIP
-from torchvision.models import vit_b_32
+
 VIT_HIDDEN_STATE = 768
 CLIP_HIDDEN_STATE = 512
 VIT_SEQ_LENGTH = 49
@@ -26,6 +25,7 @@ def print_trainable_parameters(model):
         f"Trainable params: {trainable_params} || all params: {all_param} || trainable%: {100 * trainable_params / all_param}"
     )
 
+
 class DriveVLMT5(nn.Module):
 
     def __init__(self, config):
@@ -38,16 +38,13 @@ class DriveVLMT5(nn.Module):
         else:
             self.model = T5ForConditionalGeneration.from_pretrained('google-t5/t5-large')
 
+        if config.lora:
             # For quantization
-            loftq_config = LoftQConfig(loftq_bits=8)
 
             # Create LoRA model
             lora_config = LoraConfig(
-                r=config.lora_dim,
-                lora_alpha=config.lora_alpha,
-                loftq_config=loftq_config,
-                lora_dropout=config.lora_dropout,
-                bias='none',
+                use_rslora=True,
+                bias='lora_only',
                 target_modules=['q', 'v']
             )
             self.model = get_peft_model(self.model, lora_config)
@@ -62,17 +59,13 @@ class DriveVLMT5(nn.Module):
         print('Trainable Parameters for LM model:')
         print_trainable_parameters(self.model)
 
-        # LiDAR multi-view processor
-        if config.lidar:
-            self.mvp = MultiViewLidarProcessor(config.gpa_hidden_size, hidden_size, config.lm)
-        else:
-            if config.img_encoder == 'Patch':
+        if config.img_encoder == 'Patch':
 
-                # Create instance for multi-view processor
-                self.mvp = MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm)
+            # Create instance for multi-view processor
+            self.mvp = MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm)
 
-            else:  # CLIP MVP
-                self.mvp = MultiViewProcessorCLIP(config.gpa_hidden_size, hidden_size, config.lm)
+        else:  # CLIP MVP
+            self.mvp = MultiViewProcessorCLIP(config.gpa_hidden_size, hidden_size, config.lm)
 
         self.lidar = config.lidar
 
@@ -87,7 +80,6 @@ class DriveVLMT5(nn.Module):
         # If training include the labels
         return self.model(inputs_embeds=merged_embedding, labels=labels)
 
-
     def generate(self, text_enc, imgs, lidar=None):
 
         if not self.lidar:
@@ -97,7 +89,9 @@ class DriveVLMT5(nn.Module):
             merged_embedding = self.mvp(text_enc, imgs, voxel_dict, batch_input_metas, self.model)
 
         attention_mask = torch.ones(merged_embedding.shape[:2], dtype=torch.long, device=device)
-        decoder_input_ids = torch.ones((merged_embedding.shape[0], 1), dtype=torch.long, device=device)*self.model.config.decoder_start_token_id
-        output_ids = self.model.generate(attention_mask=attention_mask, decoder_input_ids=decoder_input_ids, inputs_embeds=merged_embedding, max_length=512, early_stopping=True)
+        decoder_input_ids = torch.ones((merged_embedding.shape[0], 1), dtype=torch.long,
+                                       device=device) * self.model.config.decoder_start_token_id
+        output_ids = self.model.generate(attention_mask=attention_mask, decoder_input_ids=decoder_input_ids,
+                                         inputs_embeds=merged_embedding, max_length=512, early_stopping=True)
 
         return output_ids
