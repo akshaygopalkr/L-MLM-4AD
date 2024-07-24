@@ -1,3 +1,5 @@
+import pdb
+
 from transformers import TimesformerModel, AutoModelForSeq2SeqLM, AutoTokenizer, T5ForConditionalGeneration, T5Tokenizer
 import torch.nn as nn
 import torch
@@ -42,7 +44,6 @@ class DriveVLMT5(nn.Module):
         hidden_size = self.model.config.d_model
 
         if config.lora:
-            # For quantization
 
             # Create LoRA model
             lora_config = LoraConfig(
@@ -58,6 +59,7 @@ class DriveVLMT5(nn.Module):
                 param.requires_grad = False
 
         print('Trainable Parameters for LM model:')
+        self.lidar = config.lidar
         print_trainable_parameters(self.model)
 
         self.mvp = MultiVideoProcessor(config.gpa_hidden_size, hidden_size, config.lm)
@@ -82,7 +84,8 @@ class DriveVLMT5(nn.Module):
             merged_embedding = self.mvp(text_enc, imgs, voxel_dict, batch_input_metas, self.model)
 
         attention_mask = torch.ones(merged_embedding.shape[:2], dtype=torch.long, device=device)
-        decoder_input_ids = torch.ones((merged_embedding.shape[0], 1), dtype=torch.long, device=device)*self.model.config.decoder_start_token_id
+        decoder_input_ids = (torch.ones((merged_embedding.shape[0], 1), dtype=torch.long, device=device)
+                             *self.model.config.decoder_start_token_id)
         output_ids = self.model.generate(attention_mask=attention_mask, decoder_input_ids=decoder_input_ids, inputs_embeds=merged_embedding, max_length=512, early_stopping=True)
 
         return output_ids

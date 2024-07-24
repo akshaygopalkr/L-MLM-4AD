@@ -62,9 +62,10 @@ class DriveVLMT5(nn.Module):
         if config.img_encoder == 'Patch':
 
             # Create instance for multi-view processor
-            self.mvp = MultiViewProcessor(config.gpa_hidden_size, hidden_size, config.lm)
+            self.mvp = MultiViewProcessor(config, hidden_size, config.lm)
 
-        else:  # CLIP MVP
+        # CLIP MVP
+        else:
             self.mvp = MultiViewProcessorCLIP(config.gpa_hidden_size, hidden_size, config.lm)
 
         self.lidar = config.lidar

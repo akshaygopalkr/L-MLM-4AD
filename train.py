@@ -7,10 +7,7 @@ import os
 import time
 from torch.utils.data import DataLoader
 import torch
-import argparse
 from modules.dataset.multi_frame_dataset import MultiFrameDataset
-from modules.dataset.multi_frame_lidar_dataset import MultiFrameLidarDataset
-from modules.dataset.multi_video_lidar_dataset import MultiVideoLidarDataset
 from modules.dataset.multi_video_dataset import MultiVideoDataset
 from modules.models.multi_video_model import DriveVLMT5 as VideoModel
 from modules.models.multi_frame_model import print_trainable_parameters
@@ -19,6 +16,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from copy import deepcopy
 from tqdm import tqdm
+import wandb
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -27,6 +25,7 @@ def save_model(model, model_name):
     # Save the model into the designated folder
     path = os.path.join('multi_frame_results', timestr, model_name + '.pth')
     torch.save(model, path)
+    wandb.save(path)
 
 
 def val_model(dloader, val_model):
@@ -108,10 +107,15 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate):
 
                 # Perform decoding (e.g., greedy decoding)
                 outputs = torch.argmax(hidden_states, dim=-1)
+                try:
+                    text_outputs = [processor.decode(output.to('cpu'), skip_special_tokens=True) for output in outputs]
+                    text_questions = [processor.decode(q.to('cpu'), skip_special_tokens=True) for q in inputs]
+                    text_labels = [processor.decode(a.to('cpu'), skip_special_tokens=True) for a in labels]
+                except IndexError as e:
+                    print('Error decoding text')
+                    print(text_outputs, text_questions, text_labels)
 
-                text_outputs = [processor.decode(output.to('cpu'), skip_special_tokens=True) for output in outputs]
-                text_questions = [processor.decode(q.to('cpu'), skip_special_tokens=True) for q in inputs]
-                text_labels = [processor.decode(a.to('cpu'), skip_special_tokens=True) for a in labels]
+                wandb.log({'Training Loss': loss.item()})
                 print()
                 print('Questions:')
                 print(text_questions)
@@ -133,6 +137,9 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate):
 
         epoch_val_loss = val_model(val_dataloader, model)
         val_losses.append(epoch_val_loss)
+
+        wandb.log({'Validation Loss': epoch_val_loss})
+        wandb.log({'Epoch Training Loss': epoch_train_loss})
 
         if not val_loss or min(epoch_val_loss, val_loss) == epoch_val_loss:
             val_loss = epoch_val_loss
@@ -195,11 +202,11 @@ def save_experiment(statistics):
         'Epochs': [config.epochs],
         'LoRA finetuning': [config.lora],
         'GPA Hidden Size': [config.gpa_hidden_size],
-        'LoRA Dimension': [config.lora_dim],
-        'LoRA Alpha': [config.lora_alpha],
         'Video': [config.video],
         'LiDAR': [config.lidar],
-        'LoRA Dropout': [config.lora_dropout],
+        'CLIP-Patch': [config.clip_patch],
+        'OWL-Patch': [config.owl_patch],
+        'ViT-Patch': [config.vit_patch],
         'Freeze T5': [config.freeze_lm],
         'Min Training Loss': [statistics[0]],
         'Min Validation Loss': [statistics[1]],
@@ -216,15 +223,45 @@ if __name__ == '__main__':
 
     config = params()
 
+    patch_type = ''
+
+    if config.vit_patch:
+        patch_type += 'ViT-'
+    if config.owl_patch:
+        patch_type += 'OWL-'
+    if config.clip_patch:
+        patch_type += 'CLIP-'
+
+    run_name = f'{patch_type}{timestr}'
+
+    # start a new wandb run to track this script
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="L-MLM-4AD",
+        name=run_name,
+
+        # track hyperparameters and run metadata
+        config={
+            "Model Name": timestr,
+            "CLIP Patches": config.clip_patch,
+            "ViT Patches": config.vit_patch,
+            "OWL Patches": config.owl_patch,
+            "LoRA": config.lora,
+            "GPA Hidden Size": config.gpa_hidden_size,
+            "Freeze LM": config.freeze_lm,
+            "Video": config.video,
+            "Learning Rate": config.learning_rate,
+            "Weight decay": config.weight_decay,
+            "Batch Size": config.batch_size,
+            "epochs": config.epochs,
+        }
+    )
+
     if config.video:
 
         model_type = VideoModel
         if config.lidar:
-            data_folder = 'multi_video_LIDAR'
-            dataset = MultiVideoLidarDataset
-            train_file, val_file, test_file = (f'multi_video_LIDAR_train_{config.dataset}.json',
-                                               f'multi_video_LIDAR_val_{config.dataset}.json',
-                                               f'multi_video_LIDAR_test_{config.dataset}.json')
+            pass
         else:
             data_folder = 'multi_video'
             dataset = MultiVideoDataset
@@ -238,11 +275,8 @@ if __name__ == '__main__':
         model_type = ImageModel
 
         if config.lidar:
-            dataset = MultiFrameLidarDataset
-            data_folder = 'multi_frame_LIDAR'
-            train_file, val_file, test_file = (f'multi_frame_LIDAR_train_{config.dataset}.json',
-                                               f'multi_frame_LIDAR_val_{config.dataset}.json',
-                                               f'multi_frame_LIDAR_test_{config.dataset}.json')
+            pass
+
         else:
             dataset = MultiFrameDataset
             data_folder = 'multi_frame'
@@ -271,28 +305,19 @@ if __name__ == '__main__':
     processor.add_tokens('<')
 
     train_dset = dataset(
+        config = config,
         input_file=os.path.join('data', data_folder, train_file),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
     )
     val_dset = dataset(
+        config=config,
         input_file=os.path.join('data', data_folder, val_file),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
     )
     test_dset = dataset(
+        config=config,
         input_file=os.path.join('data', data_folder, test_file),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
     )
 
     # Create Dataloaders
