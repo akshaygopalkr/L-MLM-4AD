@@ -237,6 +237,7 @@ if __name__ == '__main__':
     # start a new wandb run to track this script
     wandb.init(
         # set the wandb project where this run will be logged
+        entity="UCSD-LISA",
         project="L-MLM-4AD",
         name=run_name,
 

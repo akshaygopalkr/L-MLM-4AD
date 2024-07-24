@@ -5,8 +5,6 @@ from pycocotools.coco import COCO
 from pycocoevalcap.eval import COCOEvalCap
 import os
 from modules.dataset.multi_frame_dataset import MultiFrameDataset
-from modules.dataset.multi_frame_lidar_dataset import MultiFrameLidarDataset
-from modules.dataset.multi_video_lidar_dataset import MultiVideoLidarDataset
 from modules.dataset.multi_video_dataset import MultiVideoDataset
 from modules.models.multi_frame_model import DriveVLMT5 as ImageModel
 from modules.models.multi_video_model import DriveVLMT5 as VideoModel
@@ -16,7 +14,6 @@ from transformers import T5Tokenizer
 from torch.utils.data import DataLoader
 import json
 import pandas as pd
-from torchvision import transforms
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -92,31 +89,11 @@ if __name__ == '__main__':
 
     processor.add_tokens('<')
 
-    if config.video:
 
-        model_type = VideoModel
-        if config.lidar:
-            data_folder = 'multi_video_LIDAR'
-            dataset = MultiVideoLidarDataset
-            test_file = f'multi_video_LIDAR_val_{config.dataset}.json'
-        else:
-            data_folder = 'multi_video'
-            dataset = MultiVideoDataset
-            test_file = f'multi_video_val_{config.dataset}.json'
-
-    # Make datasets and model for image + lidar
-    else:
-
-        model_type = ImageModel
-
-        if config.lidar:
-            dataset = MultiFrameLidarDataset
-            data_folder = 'multi_frame_LIDAR'
-            test_file = f'multi_frame_LIDAR_val_{config.dataset}.json'
-        else:
-            dataset = MultiFrameDataset
-            data_folder = 'multi_frame'
-            test_file = f'multi_frame_val_{config.dataset}.json'
+    model_type = ImageModel
+    dataset = MultiFrameDataset
+    data_folder = 'multi_frame'
+    test_file = f'multi_frame_val_{config.dataset}.json'
 
     model = model_type(config)
 
@@ -129,12 +106,9 @@ if __name__ == '__main__':
 
     # Load dataset and dataloader
     test_dset = dataset(
+        config=config,
         input_file=os.path.join('data', data_folder, test_file),
         tokenizer=processor,
-        transform=transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.Normalize((127.5, 127.5, 127.5), (127.5, 127.5, 127.5))
-        ])
     )
     test_dloader = DataLoader(test_dset, shuffle=True, batch_size=config.batch_size, drop_last=True,
                               collate_fn=test_dset.test_collate_fn)
