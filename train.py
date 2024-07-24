@@ -147,6 +147,11 @@ def custom_train(train_loss, val_loss, best_model, epochs, learning_rate):
         if not train_loss or min(train_loss, epoch_train_loss) == epoch_train_loss:
             train_loss = epoch_train_loss
 
+        if len(val_losses) > 1:
+            if val_losses[-1] > val_losses[-2]:
+                print('Overfitting, now early stopping...')
+                break
+
         # Adjust learning rate scheduler
         scheduler.step()
 
